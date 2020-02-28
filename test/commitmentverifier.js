@@ -10,8 +10,6 @@
     Tests the central mediator for block passing and validation registering.
 */
 
-const async = require('async')
-
 const Verifier = artifacts.require("ZethCommitmentEventVerifier");
 
 require('chai')
