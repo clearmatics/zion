@@ -3,11 +3,8 @@ pragma solidity ^0.5.12;
 import "./EventVerifier.sol";
 import "../libraries/RLP.sol";
 
-contract TradeRespondedEventVerifier is EventVerifier {
-    bytes32 eventSignature = keccak256("TradeResponded(bytes32,bytes32)");
-
-    event Bytes(bytes stuff);
-    event Bytes32(bytes32 stuff);
+contract ConfirmedEventVerifier is EventVerifier {
+    bytes32 eventSignature = keccak256("Confirmed(bytes32,bytes32)");
 
     function verify
     (
@@ -15,7 +12,7 @@ contract TradeRespondedEventVerifier is EventVerifier {
         bytes memory _rlpReceipt,  
         bytes32 _expectedCommitmentA,
         bytes32 _expectedCommitmentB
-    ) public returns (bool) {
+    ) public view returns (bool) {
 
         // Retrieve specific log for given event signature
         RLP.RLPItem[] memory logs = retrieveLogs(eventSignature, _contractEmittedAddress, _rlpReceipt);
@@ -29,17 +26,12 @@ contract TradeRespondedEventVerifier is EventVerifier {
             bytes32 commitmentA = SolUtils.BytesToBytes32(data, 0);
             bytes32 commitmentB = SolUtils.BytesToBytes32(data, 32);
 
-            emit Bytes(data);
-            emit Bytes32(commitmentA);
-            emit Bytes32(commitmentB);
-
-            emit Bytes32(_expectedCommitmentA);
-            emit Bytes32(_expectedCommitmentB);
-
             bool commitmentAMatch = commitmentA == _expectedCommitmentA;
             bool commitmentBMatch = commitmentB == _expectedCommitmentB;
 
-            return commitmentAMatch && commitmentBMatch;
+            if (commitmentAMatch && commitmentBMatch) {
+                return true;
+            }
         }
         return false;
     }
