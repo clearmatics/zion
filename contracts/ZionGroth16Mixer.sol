@@ -4,10 +4,11 @@
 
 pragma solidity ^0.5.0;
 
+import "./zeth-contracts/BaseZionMixer.sol";
+import "./zeth-contracts/Pairing.sol";
 import "./zeth-contracts/OTSchnorrVerifier.sol";
-import "./zeth-contracts/BaseMixer.sol";
 
-contract ZionGroth16Verifier is BaseMixer {
+contract ZionGroth16Mixer is BaseZionMixer {
 
     // The structure of the verification key differs from the reference paper.
     // It doesn't contain any element of GT, but only elements of G1 and G2 (the
@@ -49,8 +50,8 @@ contract ZionGroth16Verifier is BaseMixer {
         uint256[2] memory Delta1,
         uint256[2] memory Delta2,
         uint256[] memory ABC_coords)
-        BaseMixer(mk_depth, token)
-        public {
+    BaseZionMixer(mk_depth, token)
+    public {
         verifyKey.Alpha = Pairing.G1Point(Alpha[0], Alpha[1]);
         verifyKey.Beta = Pairing.G2Point(Beta1[0], Beta1[1], Beta2[0], Beta2[1]);
         verifyKey.Delta = Pairing.G2Point(
@@ -66,10 +67,7 @@ contract ZionGroth16Verifier is BaseMixer {
         }
     }
 
-    // This function allows to mix coins and execute payments in zero
-    // knowledge.  The nb of ciphertexts depends on the JS description (Here 2
-    // inputs)
-    function verifyCoin(
+    function verifyProof(
         uint256[2] memory a,
         uint256[4] memory b,
         uint256[2] memory c,
@@ -79,7 +77,58 @@ contract ZionGroth16Verifier is BaseMixer {
         bytes32 pk_sender,
         bytes memory ciphertext0,
         bytes memory ciphertext1)
-        public payable returns (bool) {
+    internal returns (bytes32[jsOut] memory){
+        // 1. Check the root and the nullifiers
+        check_mkroot_nullifiers_hsig(vk, input);
+
+        // 2.a Verify the signature on the hash of data_to_be_signed
+        bytes32 hash_to_be_signed = sha256(
+            abi.encodePacked(
+                uint256(msg.sender),
+                pk_sender,
+                ciphertext0,
+                ciphertext1,
+                a,
+                b,
+                c,
+                input
+            ));
+        require(
+            OTSchnorrVerifier.verify(
+                vk[0], vk[1], vk[2], vk[3], sigma, hash_to_be_signed),
+            "Invalid signature: Unable to verify the signature correctly"
+        );
+
+        // 2.b Verify the proof
+        require(
+            verifyTx(a, b, c, input),
+            "Invalid proof: Unable to verify the proof correctly"
+        );
+
+        // 3. Get commitments
+        bytes32[jsOut] memory commitments = assemble_and_return_commitments(input);
+
+        // 6. Emit the all the coins' secret data encrypted with the recipients'
+        // respective keys
+        emit_ciphertexts(pk_sender, ciphertext0, ciphertext1);
+
+        return commitments;
+    }
+
+    // This function allows to mix coins and execute payments in zero
+    // knowledge.  The nb of ciphertexts depends on the JS description (Here 2
+    // inputs)
+    function mix(
+        uint256[2] memory a,
+        uint256[4] memory b,
+        uint256[2] memory c,
+        uint256[4] memory vk,
+        uint256 sigma,
+        uint256[nbInputs] memory input,
+        bytes32 pk_sender,
+        bytes memory ciphertext0,
+        bytes memory ciphertext1)
+    public payable {
         // 1. Check the root and the nullifiers
         check_mkroot_nullifiers_hsig_append_nullifiers_state(vk, input);
 
@@ -101,19 +150,30 @@ contract ZionGroth16Verifier is BaseMixer {
             "Invalid signature: Unable to verify the signature correctly"
         );
 
-        // Only verify the commitment is ok
-        // Don't actually create it in zeth
-        if(verifyTx(a, b, c, input)) {
-            emit_ciphertexts(pk_sender, ciphertext0, ciphertext1);
-            return true;
-        }
+        // 2.b Verify the proof
+        require(
+            verifyTx(a, b, c, input),
+            "Invalid proof: Unable to verify the proof correctly"
+        );
 
-        return false;
+        // 3. Append the commitments to the tree
+        assemble_commitments_and_append_to_state(input);
+
+        // 4. Get the public values in Wei and modify the state depending on
+        // their values
+        process_public_values(input);
+
+        // 5. Add the new root to the list of existing roots and emit it
+        add_and_emit_merkle_root(recomputeRoot(jsIn));
+
+        // 6. Emit the all the coins' secret data encrypted with the recipients'
+        // respective keys
+        emit_ciphertexts(pk_sender, ciphertext0, ciphertext1);
     }
 
     function verify(uint256[] memory input, Proof memory proof)
-        internal
-        returns (uint) {
+    internal
+    returns (uint) {
 
         // `input.length` = size of the instance = l (see notations in the
         // reference paper).  We have coefficients indexed in the range[1..l],
@@ -176,42 +236,42 @@ contract ZionGroth16Verifier is BaseMixer {
 
             let g := sub(gas, 2000)
 
-            // Compute slot of ABC[0]. Solidity memory array layout defines the
-            // first entry of verifyKey.ABC as the keccak256 hash of the slot
-            // of verifyKey.ABC. The slot of verifyKey.ABC is computed using
-            // Solidity implicit `_slot` notation.
+        // Compute slot of ABC[0]. Solidity memory array layout defines the
+        // first entry of verifyKey.ABC as the keccak256 hash of the slot
+        // of verifyKey.ABC. The slot of verifyKey.ABC is computed using
+        // Solidity implicit `_slot` notation.
             mstore(pad, add(verifyKey_slot, 10))
             let abc_slot := keccak256(pad, 32)
 
-            // Compute input array bounds (layout: <len>,elem_0,elem_1...)
+        // Compute input array bounds (layout: <len>,elem_0,elem_1...)
             let input_i := add(input, 0x20)
             let input_end := add(input_i, mul(0x20, mload(input)))
 
-            // Initialize pad[0] with abc[0]
+        // Initialize pad[0] with abc[0]
             mstore(pad, sload(abc_slot))
             mstore(add(pad, 0x20), sload(add(abc_slot, 1)))
             abc_slot := add(abc_slot, 2)
 
-            // Location within pad to do scalar mul operation
+        // Location within pad to do scalar mul operation
             let mul_in := add(pad, 0x40)
 
-            // Iterate over all inputs / ABC values
+        // Iterate over all inputs / ABC values
             for
-                { }
-                lt(input_i, input_end)
-                {
-                    abc_slot := add(abc_slot, 2)
-                    input_i := add(input_i, 0x20)
-                }
+            { }
+            lt(input_i, input_end)
             {
-                // Copy abc[i+1] into mul_in, incrementing abc
+                abc_slot := add(abc_slot, 2)
+                input_i := add(input_i, 0x20)
+            }
+            {
+            // Copy abc[i+1] into mul_in, incrementing abc
                 mstore(mul_in, sload(abc_slot))
                 mstore(add(mul_in, 0x20), sload(add(abc_slot, 1)))
 
-                // Copy input[i] into mul_in + 0x40, and increment index_i
+            // Copy input[i] into mul_in + 0x40, and increment index_i
                 mstore(add(mul_in, 0x40), mload(input_i))
 
-                // bn256ScalarMul and bn256Add can be done with no copying
+            // bn256ScalarMul and bn256Add can be done with no copying
                 let s1 := call(g, 7, 0, mul_in, 0x60, mul_in, 0x40)
                 let s2 := call(g, 6, 0, pad, 0x80, pad, 0x40)
                 success := and(success, and(s1, s2))
@@ -263,22 +323,22 @@ contract ZionGroth16Verifier is BaseMixer {
 
         assembly {
 
-            // Write P2, from offset 0x40.  See Pairing for these values.
+        // Write P2, from offset 0x40.  See Pairing for these values.
             mstore(
-                add(pad, 0x040),
-                11559732032986387107991004021392285783925812861821192530917403151452391805634)
+            add(pad, 0x040),
+            11559732032986387107991004021392285783925812861821192530917403151452391805634)
             mstore(
-                add(pad, 0x060),
-                10857046999023057135944570762232829481370756359578518086990519993285655852781)
+            add(pad, 0x060),
+            10857046999023057135944570762232829481370756359578518086990519993285655852781)
             mstore(
-                add(pad, 0x080),
-                4082367875863433681332203403145435568316851327593401208105741076214120093531)
+            add(pad, 0x080),
+            4082367875863433681332203403145435568316851327593401208105741076214120093531)
             mstore(
-                add(pad, 0x0a0),
-                8495653923123431417604973247489272438418190587263600148770280649306958101930)
+            add(pad, 0x0a0),
+            8495653923123431417604973247489272438418190587263600148770280649306958101930)
 
-            // Write vk.Alpha, vk.Beta (first 6 uints from verifyKey) from
-            // offset 0x0c0.
+        // Write vk.Alpha, vk.Beta (first 6 uints from verifyKey) from
+        // offset 0x0c0.
             mstore(add(pad, 0x0c0), sload(verifyKey_slot))
             mstore(add(pad, 0x0e0), sload(add(verifyKey_slot, 1)))
             mstore(add(pad, 0x100), sload(add(verifyKey_slot, 2)))
@@ -286,7 +346,7 @@ contract ZionGroth16Verifier is BaseMixer {
             mstore(add(pad, 0x140), sload(add(verifyKey_slot, 4)))
             mstore(add(pad, 0x160), sload(add(verifyKey_slot, 5)))
 
-            // Write negate(Proof.A) and Proof.B from offset 0x180.
+        // Write negate(Proof.A) and Proof.B from offset 0x180.
             mstore(add(pad, 0x180), mload(proof))
             let q := 21888242871839275222246405745257275088696311157297823662689037894645226208583
             let proof_A_y := mload(add(proof, 0x20))
@@ -296,7 +356,7 @@ contract ZionGroth16Verifier is BaseMixer {
             mstore(add(pad, 0x200), mload(add(proof, 0x80)))
             mstore(add(pad, 0x220), mload(add(proof, 0xa0)))
 
-            // Proof.C and verifyKey.Delta from offset 0x240.
+        // Proof.C and verifyKey.Delta from offset 0x240.
             mstore(add(pad, 0x240), mload(add(proof, 0xc0)))
             mstore(add(pad, 0x260), mload(add(proof, 0xe0)))
             mstore(add(pad, 0x280), sload(add(verifyKey_slot, 6)))
@@ -318,8 +378,8 @@ contract ZionGroth16Verifier is BaseMixer {
         uint256[4] memory b,
         uint256[2] memory c,
         uint256[nbInputs] memory primaryInputs)
-        internal
-        returns (bool) {
+    internal
+    returns (bool) {
         // Scalar field characteristic
         // solium-disable-next-line
         uint256 r = 21888242871839275222246405745257275088548364400416034343698204186575808495617;
