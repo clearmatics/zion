@@ -5,15 +5,18 @@ import "./interfaces/IZethMixer.sol";
 import "./interfaces/IZionGroth16Verifier.sol";
 import "./interfaces/IonVerifiers/IZethCommitmentEventVerifier.sol";
 
-// Flow: Alice initiates on chain A and can cancel on chain B (and then taking back the coin on A) before Bob responds 
+// Preconditions: 
+// Both Alice and Bob have Zeth Notes to spend and they agreed on a certain trade
 
-// unlock proof = used by Bob to unlock his commitment on chain A and to generate his commitment for Alice
-// is a proof that Bob's commitment is a valid Zeth Commitment (spendable only by alice) plus that the underlying metadata matches the one agreed with alice (same value)
+// Flow: 
+// Alice initiates on chain A and can cancel on chain B before Bob responds. 
+// She uses the proof she cancelled on chain B to release her locked coins on chain A
 
-// zeth proof = proof of a commitment 
+// If Bob responds on chain B with a valid commitment he can cancel on chain A before Alice confirms 
+// If Alice confirms on chain A the trade go through 
 
-// cancel proof = proves that Alice commitment for bob was created by alice spent coin nullifier 
-// C
+// If Bob cancels on chain A before Alice's confirmation Alice's locked commitment is released and
+// Bob uses the proof he has cancelled on chain A to release his coin on chain B
 
 contract Zion {
 
@@ -26,10 +29,8 @@ contract Zion {
     // commitment => zeth proof 
     mapping(bytes => bytes) pendingCommitments;
 
-    // tells if I can still cancel my commitment on my chain
-    mapping(bytes => bool) isCCTradeCounterpartyCancellable; 
-
-    // tells if the counterparty has cancelled his commitment on my chain to prevent someone to respond to a cancelled trade
+    // tells if the counterparty has cancelled his commitment 
+    // prevents the parties to respond to a cancelled trade
     mapping(bytes => bool) isCounterpartyCommitmentCancelled; 
 
     
@@ -50,112 +51,122 @@ contract Zion {
         zethCommitmentEventVerifier = IZethCommitmentEventVerifier(zethCommitmentEventVerifierAddr);
     }
 
-
-    // takes proof of the deposited coin and require eth 
-    // check the proof 
-    // store it in transit data structure 
-    // emit event of the deposited proof with Alice old coin nullifier and the new committment for bob
-    function initiateSwap(bytes32 commitment, bytes zethProof) external payable {
-
-        // TODO msg.value where is checked against the commitment ? 
+    // 1 - Alice initiates the trade on chain A
+    function initiateSwap(bytes32 commitmentA, bytes zethProof) external {
 
         // verify commitment with ZionGroth16Verifier 
-        require(zethVerifier(commitment, zethProof) === true, "This is not a valid zeth commitment");
-
-        // alice can still cancel through a proof of cancelling from chain B
-        isCCTradeCounterpartyCancellable[AliceCommitment] = true; 
+        require(zethVerifier(commitmentA, zethProof) === true, "This is not a valid zeth commitment");
 
         // cache the data to be used later on 
-        pendingCommitments[commitments] = zethProof;
+        pendingCommitments[commitmentA] = zethProof;
         
         // log info needed to be verified through ION proofs
-        emit TradeInitiated(commitment);
+        emit TradeInitiated(commitmentA);
     }
 
-    // bob reads commitment info from block store 
-    // bob submits proof that he has committed a coin with the agreed metadata that matches alice coin - this will go into the event to carry over
-    // bob submits the right amount of eth
-    // submits the proof that he has created the coin for alice - his commitment is stored in zeth ready for alice
-    function respondToSwap(
-        bytes32 commitment, 
-        bytes zethProof, 
-        bytes32 counterpartyCommitment
-    ) external 
-    { 
-        
-        // verify the commitment i'm responding to hasn't been cancelled 
-        require(isCounterpartyCommitmentCancelled[counterpartyCommitment] === false, "The trade has been cancelled by the counterparty");
+    // 2a - Bob accepts on chain B the trade
+    function respondToSwap( bytes32 commitmentB, bytes zethProof,  bytes32 commitmentA) external {   
 
-        // verify the counterparty commitment has happened with ION 
-        require(IZethCommitmentEventVerifier(counterpartyCommitment), "The commitment you are responding to doesn't exists on the other chain");
+        // verify with ION that TradeInitiated(commitmentA) was triggered on chain A;
+        require(IZethCommitmentEventVerifier(commitmentA), "The commitment you are responding to doesn't exists on the other chain");
+
+        // verify the commitment i'm responding to hasn't been cancelled 
+        require(isCounterpartyCommitmentCancelled[commitmentA] === false, "The trade has been cancelled by the counterparty");
 
         // verify my commitment is a valid zeth commitment 
-        require(zethVerifier(commitment, zethProof) === true, "This is not a valid zeth commitment");
+        require(zethVerifier(commitmentB, zethProof) === true, "This is not a valid zeth commitment");
 
         // cache the data to be used later on 
-        pendingCommitments[commitments] = zethProof;
+        pendingCommitments[commitmentB] = zethProof;
 
-        // bob can cancel his commitment ?
-        isCCTradeCounterpartyCancellable[BobCommitment] = true; 
-
-        // log info needed to be verified through ION proofs
-        emit TradeResponded(commitment);
+        // log
+        emit TradeResponded(commitmentA, commitmentB);
     }
 
-    // on the counterparty chain 
-    function cancelTrade(bytes commitmentToCancel) external {
+    // 2b - Alice cancels on chain B before Bob accepts
+    function initiatorCancel(bytes commitmentA) external {
         
-        // verify ION proof that the commitment to cancel has happened 
-        require(IZethCommitmentEventVerifier(counterpartyCommitment), "The commitment you are trying to cancel to doesn't exists on the other chain");
+        // verify with ION that TradeInitiated(commitmentA) was triggered on chain A;
+        require(IZethCommitmentEventVerifier(commitmentA), "The commitment you are trying to cancel to doesn't exists on the other chain");
 
         // TODO verify with zocrates that i have the right to cancel the coin 
 
-        isCounterpartyCommitmentCancelled[commitment] = true;
+        // to prevent Bob to accept the trade
+        isCounterpartyCommitmentCancelled[commitmentA] = true;
         
-        emit Cancelled(commitmentToCancel);  
+        // log 
+        emit InitiatorCancelled(commitmentA);  
     } 
 
-    // to unlock my pending transaction with the proof of cancel on chain B 
-    function finalizeCancel(bytes commitmentToCancel) external {
+    // 3a - Bob cancels on chain A after 2a and before 3b
+    function responderCancel(bytes commitmentA, bytes commitmentB) external {
 
-        require(isCCTradeCounterpartyCancellable[commitmentToCancel] === true, "You can't cancel this commitment");
+        // TODO verify TradeResponded(commitmentA, commitmentB)
 
-        // TODO require ION proof of cancelling 
-
-        isCCTradeCounterpartyCancellable[alice/BobCommitment] = false; 
+        // this shouldn't be necessary
+        require(isPendingCommitments[commitmentA] === true, "The commitmentA doesn-t exist");
         
-        delete pendingCommitments[commitmentToCancel]; 
+        // TODO verify with zocrates that i have the right to cancel the coin 
 
-        emit Cancelled(commitmentToCancel);
+        // to prevent Alice to finalize the trade
+        isCounterpartyCommitmentCancelled[commitmentB] = true;
+
+        // release Alice note
+        delete pendingCommitments[commitmentA];
         
+        // log
+        emit ResponderCancelled(commitmentA, commitmentB);  
     }
 
-    // initiatior finalizes the trade 
+    // 3b - Alice finalizes the trade on chain A after 2a and before 3a
     function confirmTrade(bytes commitmentA, bytes commitmentB)  {
 
-         // verify ION proof that BOB has committed 
-        require(IZethCommitmentEventVerifier(commitmentB), "The commitment you are trying to cancel to doesn't exists on the other chain");
+        // TODO verify TradeResponded(commitmentA, commitmentB);
 
         // verify that commitmentB hasn't been cancelled 
         require(isCounterpartyCommitmentCancelled[commitmentB] === false, "The counterparty cancelled the trade");
 
-        // verify that commitment A should be in pending commitments 
+        // verify that commitment A is in pending commitments - shouldn't be required
         require(pendingCommitments[commitmentA], "The commitment is not pending");
         
-        // TODO take the cached zeth proof and pass to zeth mixer to create coin for bob -> should be done by bob for symmetry
+        // TODO take the cached zeth proof and pass to zeth mixer to create coin for bob
 
-        isCCTradeCounterpartyCancellable[commitmentA] = false; 
+        // delete alice pending commitment 
+        delete pendingCommitments[commitmentA]; 
+        
+        // log
         emit Confirmed(commitmentA, commitmentB);
     }
 
+    // 3c - Alice unlocks her funds on chain A after 2b
+    function initiatorRefund(bytes commitmentA) external {
+        
+        // TODO verify InitiatorCancelled(commitmentA)
 
-    function unlockTransaction(bytes commitmenttoUnlock) external {
- 
-        require(pendingCommitments[commitmentA], "The commitment is not pending");
+        delete pendingCommitments[commitmentA]; 
 
-        // require that the trade has been confirmed with ION proof
+        emit InitiatorRefunded(commitmentA); 
+    }
 
-        // take the cached zeth proof related to the commitmentToUnlock and pass to zeth mixer to create coin  
+    // 4a - Bob unlocks his fund on chain B after 3a 
+    function responderRefund(bytes commitmentB) external {
+        // TODO verify ResponderCancelled(commitmentB) 
+        
+        delete pendingCommitments[commitmentB]; 
+
+        emit ResponderRefunded(commitmentB);
+    }
+
+    // 4b - Alice access her zeth note on chain B after 3b
+    function Finalize(bytes commitmentA. bytes commitmentB) {
+
+        // TODO verify Confirmed(commitmentA, commitmentB);
+
+        // TODO take the cached zeth proof and pass to zeth mixer to create coin for alice on chain B
+        
+        delete pendingCommitments[commitmentA]; 
+
+        emit Finalized(commitmentA, commitmentB);
     }
 
 }
