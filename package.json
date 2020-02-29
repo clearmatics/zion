@@ -1,0 +1,26 @@
+{
+  "name": "zion",
+  "version": "0.0.1",
+  "description": "Zeth + Ion PoC",
+  "main": "index.js",
+  "scripts": {
+    "test": "truffle test",
+    "compile": "truffle compile",
+    "testRpc": "ganache-cli"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/clearmatics/zion.git"
+  },
+  "author": "Clearmatics",
+  "license": "LGPL-3.0",
+  "bugs": {
+    "url": "https://github.com/clearmatics/zion/issues"
+  },
+  "homepage": "https://github.com/clearmatics/zion#readme",
+  "dependencies": {
+    "chai": "^4.2.0",
+    "chai-as-promised": "^7.1.1",
+    "truffle": "^5.1.14"
+  }
+}
