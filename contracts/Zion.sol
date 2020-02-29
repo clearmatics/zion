@@ -64,6 +64,12 @@ contract Zion is ZionGroth16Mixer {
     event Finalized(bytes32 initiatorCommitment, bytes32 responderCommitment);
 
     constructor (
+        address ethStoreAddr,
+        address tradeInitiatedEventVerifierAddr,
+        address tradeRespondedEventVerifierAddr,
+        address initiatorCancelledEventVerifierAddr,
+        address responderCancelledEventVerifierAddr,
+        address confirmedEventVerifierAddr,
         uint256 mk_depth,
         address token,
         uint256[2] memory Alpha,
@@ -71,14 +77,7 @@ contract Zion is ZionGroth16Mixer {
         uint256[2] memory Beta2,
         uint256[2] memory Delta1,
         uint256[2] memory Delta2,
-        uint256[] memory ABC_coords,
-        address ethStoreAddr,
-        address zethMixerAddr,
-        address tradeInitiatedEventVerifierAddr,
-        address tradeRespondedEventVerifierAddr,
-        address initiatorCancelledEventVerifierAddr,
-        address responderCancelledEventVerifierAddr,
-        address confirmedEventVerifierAddr
+        uint256[] memory ABC_coords
     ) public ZionGroth16Mixer(
         mk_depth,
         token,
