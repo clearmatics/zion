@@ -96,7 +96,7 @@ contract Zion {
         // cache the data to be used later on 
         pendingCommitments[commitments] = zethProof;
 
-        // bob can cancel his commitment 
+        // bob can cancel his commitment ?
         isCCTradeCounterpartyCancellable[BobCommitment] = true; 
 
         // log info needed to be verified through ION proofs
@@ -134,30 +134,29 @@ contract Zion {
     // initiatior finalizes the trade 
     function confirmTrade(bytes commitmentA, bytes commitmentB)  {
 
-        // commitment A should be in pending commitments 
+         // verify ION proof that BOB has committed 
+        require(IZethCommitmentEventVerifier(commitmentB), "The commitment you are trying to cancel to doesn't exists on the other chain");
+
+        // verify that commitmentB hasn't been cancelled 
+        require(isCounterpartyCommitmentCancelled[commitmentB] === false, "The counterparty cancelled the trade");
+
+        // verify that commitment A should be in pending commitments 
         require(pendingCommitments[commitmentA], "The commitment is not pending");
-
-        // how do we check commitment B is still in pending 
         
-        // verify ION proof that the commitment B to cancel has happened 
-        // require(IZethCommitmentEventVerifier(counterpartyCommitment), "The commitment you are trying to cancel to doesn't exists on the other chain");
+        // take the cached zeth proof and pass to zeth mixer to create coin for bob -> should be done by bob for symmetry
 
-
-        submits ion proof that bob responded to swap 
-        take the cached zeth proof and pass to zeth mixer to create coin for bob
-        delete cached stuff 
-        isCCTradeCounterpartyCancellable[alice/BobCommitment] = false; 
-        emit event 
+        isCCTradeCounterpartyCancellable[commitmentA] = false; 
+        emit Confirmed(commitmentA, commitmentB);
     }
 
 
-    function unlockTransaction(bytes commitment) external {
-
-        // commitment A should be in pending commitments 
+    function unlockTransaction(bytes commitmenttoUnlock) external {
+ 
         require(pendingCommitments[commitmentA], "The commitment is not pending");
 
-        // verify ION proof that alice confirmed the trade on chain A 
-        // take the cached bob zeth proof and pass to zeth mixer to create coin  
+        // require that the trade has been confirmed with ION proof
+
+        // take the cached zeth proof related to the commitmentToUnlock and pass to zeth mixer to create coin  
     }
 
 }
