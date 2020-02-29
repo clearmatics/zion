@@ -4,7 +4,9 @@
   "description": "Zeth + Ion PoC",
   "main": "index.js",
   "scripts": {
-    "test": "truffle test"
+    "test": "truffle test",
+    "compile": "truffle compile",
+    "testRpc": "ganache-cli"
   },
   "repository": {
     "type": "git",
