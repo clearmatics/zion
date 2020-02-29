@@ -81,11 +81,10 @@ contract Zion {
         bytes zethProof, 
         bytes32 counterpartyCommitment
     ) external 
-        isCounterpartyCommitmentCancelled(counterpartyCommitment) 
     { 
         
         // verify the commitment i'm responding to hasn't been cancelled 
-        require(isCounterpartyCommitmentCancelled[commitment] === false, "The trade has been cancelled by the counterparty");
+        require(isCounterpartyCommitmentCancelled[counterpartyCommitment] === false, "The trade has been cancelled by the counterparty");
 
         // verify the counterparty commitment has happened with ION 
         require(IZethCommitmentEventVerifier(counterpartyCommitment), "The commitment you are responding to doesn't exists on the other chain");
@@ -143,7 +142,7 @@ contract Zion {
         // verify that commitment A should be in pending commitments 
         require(pendingCommitments[commitmentA], "The commitment is not pending");
         
-        // take the cached zeth proof and pass to zeth mixer to create coin for bob -> should be done by bob for symmetry
+        // TODO take the cached zeth proof and pass to zeth mixer to create coin for bob -> should be done by bob for symmetry
 
         isCCTradeCounterpartyCancellable[commitmentA] = false; 
         emit Confirmed(commitmentA, commitmentB);
