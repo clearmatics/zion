@@ -114,6 +114,7 @@ contract Zion is ZionGroth16Mixer {
         for (uint i = 0; i < jsOut; i++) {
             emit TradeInitiated(commitments[i]);
             pendingCommitments[commitments[i]] = ZethProof(a,b,c,vk,sigma,input,pk_sender,ciphertext0,ciphertext1);
+            isPendingCommitment[commitments[i]] = true;
         }
     }
 
@@ -166,6 +167,7 @@ contract Zion is ZionGroth16Mixer {
             emit TradeResponded(_initiatorCommitment, commitments[i]);
             // cache the data to be used later on
             pendingCommitments[commitments[i]] = ZethProof(a,b,c,vk,sigma,input,pk_sender,ciphertext0,ciphertext1);
+            isPendingCommitment[commitments[i]] = true;
         }
     }
 

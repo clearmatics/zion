@@ -134,6 +134,7 @@ contract BaseZionMixer is MerkleTreeMiMC7, ERC223ReceivingContract {
     // is key to obfuscate the transaction graph while enabling on-chain storage
     // of the coins' data (useful to ease backup of user's wallets)
     event LogSecretCiphers(bytes32 pk_sender, bytes ciphertext);
+    event LogPendingCommitmentCipher(bytes32 pk_sender, bytes ciphertext);
 
     // Event to emit the nullifiers for the mix call.
     event LogNullifier(bytes32 nullifier);
@@ -491,5 +492,14 @@ contract BaseZionMixer is MerkleTreeMiMC7, ERC223ReceivingContract {
     internal {
         emit LogSecretCiphers(pk_sender, ciphertext0);
         emit LogSecretCiphers(pk_sender, ciphertext1);
+    }
+
+    function emit_pending_ciphertexts(
+        bytes32 pk_sender,
+        bytes memory ciphertext0,
+        bytes memory ciphertext1)
+    internal {
+        emit LogPendingCommitmentCipher(pk_sender, ciphertext0);
+        emit LogPendingCommitmentCipher(pk_sender, ciphertext1);
     }
 }
