@@ -110,7 +110,7 @@ contract ZionGroth16Mixer is BaseZionMixer {
 
         // 6. Emit the all the coins' secret data encrypted with the recipients'
         // respective keys
-        emit_ciphertexts(pk_sender, ciphertext0, ciphertext1);
+        emit_pending_ciphertexts(pk_sender, ciphertext0, ciphertext1);
 
         return commitments;
     }
