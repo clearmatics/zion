@@ -128,7 +128,7 @@ contract ZionGroth16Mixer is BaseZionMixer {
         bytes32 pk_sender,
         bytes memory ciphertext0,
         bytes memory ciphertext1)
-    public payable {
+    internal payable {
         // 1. Check the root and the nullifiers
         check_mkroot_nullifiers_hsig_append_nullifiers_state(vk, input);
 

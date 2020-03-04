@@ -1,9 +1,6 @@
 pragma solidity ^0.5.12;
 
 import "./interfaces/IEthStore.sol";
-import "./interfaces/IZethMixer.sol";
-import "./interfaces/IZionGroth16Verifier.sol";
-import "./interfaces/IonVerifiers/IZethCommitmentEventVerifier.sol";
 import "./ZionGroth16Mixer.sol";
 import "./verifiers/TradeInitiatedEventVerifier.sol";
 import "./verifiers/ConfirmedEventVerifier.sol";
@@ -12,7 +9,7 @@ import "./verifiers/TradeRespondedEventVerifier.sol";
 import "./verifiers/InitiatorCancelledEventVerifier.sol";
 
 // Preconditions: 
-// Both Alice and Bob have Zeth Notes to spend and they agreed on a certain trade
+// Both Alice and Bob agree on values and recipient addresses for the trade but can trustlessly execute thereafter
 
 // Flow: 
 // Alice initiates on chain A and can cancel on chain B before Bob responds. 
@@ -25,14 +22,17 @@ import "./verifiers/InitiatorCancelledEventVerifier.sol";
 // Bob uses the proof he has cancelled on chain A to release his coin on chain B
 
 contract Zion is ZionGroth16Mixer {
+    // ION: Block storage contract
     IEthStore internal blockStore;
 
+    // ION: Event verifiers required for flow control
     TradeInitiatedEventVerifier internal tradeInitiatedEventVerifier;
     TradeRespondedEventVerifier internal tradeRespondedEventVerifier;
     InitiatorCancelledEventVerifier internal initiatorCancelledEventVerifier;
     ResponderCancelledEventVerifier internal responderCancelledEventVerifier;
     ConfirmedEventVerifier internal confirmedEventVerifier;
 
+    // Struct to allow us to store zeth proofs
     struct ZethProof {
         uint256[2] a;
         uint256[4] b;
@@ -48,11 +48,14 @@ contract Zion is ZionGroth16Mixer {
     // cache valid zeth commitments until the trade is finalized and use it to actually create zeth note for counterparty
     // commitment => zeth proof 
     mapping(bytes32 => ZethProof) pendingCommitments;
+
+    // records commitments currently in a pending cross chain transaction
+    // (possibly able to fold in the intentions for this map into the above map by checking default values of the above)
     mapping(bytes32 => bool) isPendingCommitment;
 
     // tells if the counterparty has cancelled his commitment 
     // prevents the parties to respond to a cancelled trade
-    mapping(bytes32 => bool) isCounterpartyCommitmentCancelled;
+    mapping(bytes32 => bool) hasCommitmentReceivedResponse;
 
     event TradeInitiated(bytes32 commitment);
     event TradeResponded(bytes32 initiatorCommitment, bytes32 responderCommitment);
@@ -63,6 +66,16 @@ contract Zion is ZionGroth16Mixer {
     event Confirmed(bytes32 initiatorCommitment, bytes32 responderCommitment);
     event Finalized(bytes32 initiatorCommitment, bytes32 responderCommitment);
 
+    // Constructor
+    // Requires:
+    //      - ION verifiers: Event verifiers for cross-chain flow control:
+    //          * ethStoreAddr: Contract address of ethereum storage contract (or other if using this across to a non-ethereum chain)
+    //          * tradeInitiatedEventVerifierAddr: Contract address of tradeinitiated event verifier
+    //          * tradeRespondedEventVerifierAddr: Contract address of traderesponded event verifier
+    //          * initiatorCancelledEventVerifierAddr: Contract address of initiatorcancelled event verifier
+    //          * responderCancelledEventVerifierAddr: Contract address of respondercancelled event verifier
+    //          * confirmedEventVerifierAddr: Contract address of confirmed event verifier
+    //      - Zeth Verification Key and note setup:
     constructor (
         address ethStoreAddr,
         address tradeInitiatedEventVerifierAddr,
@@ -110,9 +123,14 @@ contract Zion is ZionGroth16Mixer {
         // verify commitment with ZionGroth16Verifier
         bytes32[jsOut] memory commitments = verifyProof(a, b, c, vk, sigma, input, pk_sender, ciphertext0, ciphertext1);
 
-        // log info needed to be verified through ION proofs
         for (uint i = 0; i < jsOut; i++) {
+            // check commitments haven't already been used for other cross chain swaps
+            require(!isPendingCommitment[commitments[i]], "Commitment already exists in pending.");
+
+            // log info needed to be verified through ION proofs
             emit TradeInitiated(commitments[i]);
+
+            // cache proofs for later release on coin creation
             pendingCommitments[commitments[i]] = ZethProof(a,b,c,vk,sigma,input,pk_sender,ciphertext0,ciphertext1);
             isPendingCommitment[commitments[i]] = true;
         }
@@ -135,15 +153,17 @@ contract Zion is ZionGroth16Mixer {
         bytes memory _proof,
         bytes32 _initiatorCommitment
     ) public {
+        // ION verification of initiated trade on opposite chain
         bytes memory receipt = blockStore.CheckProofs(_chainId, _blockHash, _proof);
         require(tradeInitiatedEventVerifier.verify(_contractEmittedAddress, receipt, _initiatorCommitment), "Event verification failed.");
 
         // verify the commitment i'm responding to hasn't been cancelled 
-        require(!isCounterpartyCommitmentCancelled[_initiatorCommitment], "The trade has been cancelled by the counterparty");
+        require(!hasCommitmentReceivedResponse[_initiatorCommitment], "The trade has been cancelled by the counterparty");
 
         // to prevent alice from cancelling
-        isCounterpartyCommitmentCancelled[_initiatorCommitment] = true;
+        hasCommitmentReceivedResponse[_initiatorCommitment] = true;
 
+        // continue execution in new stack
         rts2(a,b,c,vk,sigma,input,pk_sender,ciphertext0,ciphertext1, _initiatorCommitment);
     }
 
@@ -162,9 +182,13 @@ contract Zion is ZionGroth16Mixer {
         // verify commitment with ZionGroth16Verifier
         bytes32[jsOut] memory commitments = verifyProof(a, b, c, vk, sigma, input, pk_sender, ciphertext0, ciphertext1);
 
-        // log info needed to be verified through ION proofs
         for (uint i = 0; i < jsOut; i++) {
+            // check commitments haven't already been used for other cross chain swaps
+            require(!isPendingCommitment[commitments[i]], "Commitment already exists in pending.");
+
+            // log info needed to be verified through ION proofs
             emit TradeResponded(_initiatorCommitment, commitments[i]);
+
             // cache the data to be used later on
             pendingCommitments[commitments[i]] = ZethProof(a,b,c,vk,sigma,input,pk_sender,ciphertext0,ciphertext1);
             isPendingCommitment[commitments[i]] = true;
@@ -179,21 +203,22 @@ contract Zion is ZionGroth16Mixer {
         bytes memory _proof,
         bytes32 _initiatorCommitment
     ) public {
+        // ION verification of initiated trade on opposite chain
         bytes memory receipt = blockStore.CheckProofs(_chainId, _blockHash, _proof);
         require(tradeInitiatedEventVerifier.verify(_contractEmittedAddress, receipt, _initiatorCommitment), "Event verification failed.");
 
-        // TODO verify with zocrates that i have the right to cancel the coin
+        // TODO verify with zokrates that Initiator has the right to cancel the swap
         // verify the commitment i'm responding to hasn't been cancelled
-        require(!isCounterpartyCommitmentCancelled[_initiatorCommitment], "The trade has already been responded to by counterparty");
+        require(!hasCommitmentReceivedResponse[_initiatorCommitment], "The trade has already been responded to by counterparty");
 
         // to prevent Bob to accept the trade
-        isCounterpartyCommitmentCancelled[_initiatorCommitment] = true;
+        hasCommitmentReceivedResponse[_initiatorCommitment] = true;
         
         // log 
         emit InitiatorCancelled(_initiatorCommitment);
     } 
 
-    // 3a - Bob cancels on chain A after 2a and before 3b
+    // 3a.1 - Bob cancels on chain A after 2a and before 3b
     function responderCancel(
         bytes32 _chainId,
         bytes32 _blockHash,
@@ -208,14 +233,41 @@ contract Zion is ZionGroth16Mixer {
         // Check that Alice has not already confirmed the trade
         require(isPendingCommitment[_initiatorCommitment], "The commitment doesn't exist");
         
-        // TODO verify with zocrates that i have the right to cancel the coin 
+        // TODO verify with zokrates that Responder has the right to cancel the swap
 
         // to prevent Alice from confirming the trade
-        isCounterpartyCommitmentCancelled[_responderCommitment] = true;
+        hasCommitmentReceivedResponse[_responderCommitment] = true;
 
         // release Alice note
         delete pendingCommitments[_initiatorCommitment];
         
+        // log
+        emit ResponderCancelled(_initiatorCommitment, _responderCommitment);
+    }
+
+    // 3a.2 - Alice cancels on chain A after 2a and before 3b
+    function initiatorResponderCancel(
+        bytes32 _chainId,
+        bytes32 _blockHash,
+        bytes20 _contractEmittedAddress,
+        bytes memory _proof,
+        bytes32 _initiatorCommitment,
+        bytes32 _responderCommitment
+    ) public {
+        bytes memory receipt = blockStore.CheckProofs(_chainId, _blockHash, _proof);
+        require(tradeRespondedEventVerifier.verify(_contractEmittedAddress, receipt, _initiatorCommitment, _responderCommitment), "Event verification failed.");
+
+        // Check that Alice has not already confirmed the trade
+        require(isPendingCommitment[_initiatorCommitment], "The commitment doesn't exist");
+
+        // TODO verify with zokrates that Initiator has the right to cancel the swap
+
+        // to prevent Alice from confirming the trade
+        hasCommitmentReceivedResponse[_responderCommitment] = true;
+
+        // release Alice note
+        delete pendingCommitments[_initiatorCommitment];
+
         // log
         emit ResponderCancelled(_initiatorCommitment, _responderCommitment);
     }
@@ -236,7 +288,7 @@ contract Zion is ZionGroth16Mixer {
         require(isPendingCommitment[_initiatorCommitment], "The commitment doesn't exist in pending");
 
         // verify that responder hasn't cancelled
-        require(!isCounterpartyCommitmentCancelled[_responderCommitment], "The counterparty cancelled the trade");
+        require(!hasCommitmentReceivedResponse[_responderCommitment], "The counterparty cancelled the trade");
 
         // Fetch cached zeth proof
         ZethProof storage zethProof = pendingCommitments[_initiatorCommitment];
@@ -325,6 +377,39 @@ contract Zion is ZionGroth16Mixer {
         delete pendingCommitments[_responderCommitment];
 
         emit Finalized(_initiatorCommitment, _responderCommitment);
+    }
+
+    // Function to create or spend note
+    // Wrapped super.mix to check pending commitments to avoid double spend
+    function mix(
+        uint256[2] memory a,
+        uint256[4] memory b,
+        uint256[2] memory c,
+        uint256[4] memory vk,
+        uint256 sigma,
+        uint256[nbInputs] memory input,
+        bytes32 pk_sender,
+        bytes memory ciphertext0,
+        bytes memory ciphertext1
+    ) public payable {
+        bytes32[jsOut] memory commitments = verifyProof(a, b, c, vk, sigma, input, pk_sender, ciphertext0, ciphertext1);
+
+        // Check if commitments already exist in pending
+        for (uint i = 0; i < jsOut; i++) {
+            require(!isPendingCommitment[commitments[i]], "Cannot spend note. Note is in transit for cross-chain transaction.");
+        }
+
+        super.mix(
+            a,
+            b,
+            c,
+            vk,
+            sigma,
+            input,
+            pk_sender,
+            ciphertext0,
+            ciphertext1
+        );
     }
 
 }
